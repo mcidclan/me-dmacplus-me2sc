@@ -1,6 +1,6 @@
 ## Dmacplus me2sc Sample Code
 
-Implementation of 'dmacplusMe2Sc' transferring n bits from me to sc. The example transfers a block of 0x40000 bytes.
+Implementation of 'dmacplusInitMe2ScLLI', enabling the transfer of n data bytes from Me to Sc by constructing the required LLIs. The example transfers a 0x40000-byte block.
 
 # Requirements
 Run `./build.sh` from a bash shell.

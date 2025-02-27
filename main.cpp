@@ -5,8 +5,16 @@ PSP_MODULE_INFO("me2sc", 0, 1, 1);
 PSP_HEAP_SIZE_KB(-1024);
 PSP_MAIN_THREAD_ATTR(PSP_THREAD_ATTR_VFPU | PSP_THREAD_ATTR_USER);
 
+static volatile u32* mem = nullptr;
+#define meCounter         (mem[0])
+#define meExit            (mem[1])
+
 __attribute__((noinline, aligned(4)))
 static void meLoop() {
+  do {
+    meDCacheWritebackInvalidAll();
+  } while(!mem);
+  
   u32 offset = 0;
   u32 color = 0xffffffff;
   do {
@@ -18,6 +26,11 @@ static void meLoop() {
     }
   } while(offset < 0x40000);
   meDCacheWritebackInvalidAll();
+  
+  do {
+    meCounter++;
+  } while(meExit == 0);
+  meExit = 2;
   meHalt();
 }
 
@@ -56,8 +69,12 @@ static int initMe() {
   return 0;
 }
 
-static int bringMeData(){
-  dmacplusMe2Sc(ME_EDRAM_BASE, GE_EDRAM_BASE, 0x40000);
+static volatile DMADescriptor* lli = nullptr;
+
+static int me2Sc() {
+  cleanChannel();
+  dmacplusLLIFromMe(lli);
+  waitChannel();
   return 0;
 }
 
@@ -66,7 +83,7 @@ void exitSample(const char* const str) {
   pspDebugScreenClear();
   pspDebugScreenSetXY(0, 1);
   pspDebugScreenPrintf(str);
-  sceKernelDelayThread(1000000);
+  sceKernelDelayThread(100000);
   sceKernelExitGame();
 }
 
@@ -78,6 +95,7 @@ int main() {
     return 0;
   }
 
+  mem = meGetUncached32(4);
   kcall(&initMe);
   
   sceDisplaySetFrameBuf((void*)(UNCACHED_USER_MASK |
@@ -85,14 +103,24 @@ int main() {
   pspDebugScreenInitEx(0, PSP_DISPLAY_PIXEL_FORMAT_8888, 0);
   pspDebugScreenSetOffset(0);
 
-  kcall(&bringMeData);
-  
+  lli = dmacplusInitMe2ScLLI(ME_EDRAM_BASE, GE_EDRAM_BASE, 0x40000);
+
   SceCtrlData ctl;
   do {
+    kcall(&me2Sc);
     sceCtrlPeekBufferPositive(&ctl, 1);
+    pspDebugScreenSetXY(0, 17);
+    pspDebugScreenPrintf("%x          ", meCounter);
     sceDisplayWaitVblankStart();
   } while(!(ctl.Buttons & PSP_CTRL_HOME));
   
+  meExit = 1;
+  do {
+    asm volatile("sync");
+  } while(meExit < 2);
+  
+  free((void*)lli);
+  meGetUncached32(0);
   exitSample("Exiting...");
   return 0;
 }

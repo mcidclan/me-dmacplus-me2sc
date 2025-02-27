@@ -38,6 +38,19 @@ inline void meHalt() {
   asm volatile(".word 0x70000000");
 }
 
+inline u32* meGetUncached32(const u32 size) {
+  static void* _base = nullptr;
+  if (!_base) {
+    _base = memalign(16, size*4);
+    memset(_base, 0, size);
+    sceKernelDcacheWritebackInvalidateAll();
+    return (u32*)(UNCACHED_USER_MASK | (u32)_base);
+  } else if (!size) {
+    free(_base);
+  }
+  return nullptr;
+}
+
 template<typename T>
 inline T xorshift() {
   static T state = 1;
@@ -92,7 +105,7 @@ inline void waitChannel() {
   };
 }
 
-inline void dmacplusLLIFromMe(const DMADescriptor* const lli) {
+inline void dmacplusLLIFromMe(volatile const DMADescriptor* const lli) {
   hw(0xbc8001a0) = lli->src;
   hw(0xbc8001a4) = lli->dst;
   hw(0xbc8001a8) = lli->next;
@@ -101,60 +114,58 @@ inline void dmacplusLLIFromMe(const DMADescriptor* const lli) {
   asm volatile("sync");
 }
 
-inline void dmacplusMe2Sc(const u32 src, const u32 dst, const u32 size) {
-    constexpr u32 MAX_TRANSFER_SIZE = 4095;
-    constexpr struct { u32 width; u32 widthBit; } modes[] = {
-      {16, 4}, {8, 3}, {4, 2}, {2, 1}, {1, 0}
-    };
+inline DMADescriptor* dmacplusInitMe2ScLLI(const u32 src, const u32 dst, const u32 size) {
+  constexpr u32 MAX_TRANSFER_SIZE = 4095;
+  constexpr struct { u32 width; u32 widthBit; } modes[] = {
+    {16, 4}, {8, 3}, {4, 2}, {2, 1}, {1, 0}
+  };
 
-    u32 lliCount = 0;
-    u32 remaining = size;
-    
-    for (int w = 0; w < 4 && remaining > 0; w++) {
-      u32 block = modes[w].width * MAX_TRANSFER_SIZE;
-      lliCount += remaining / block;
-      remaining %= block;
-    }
-    lliCount += (remaining > 0);
-    
-    cleanChannel();
-    DMADescriptor* lli = (DMADescriptor*) memalign(16, sizeof(DMADescriptor) * lliCount);
-    sceKernelDcacheWritebackInvalidateAll();
-    DMADescriptor* _lli = (DMADescriptor*)(UNCACHED_USER_MASK | (u32)lli);
+  u32 lliCount = 0;
+  u32 remaining = size;
   
-    u32 i = 0;
-    u32 offset = 0;
-    remaining = size;
+  for (int w = 0; w < 4 && remaining > 0; w++) {
+    u32 block = modes[w].width * MAX_TRANSFER_SIZE;
+    lliCount += remaining / block;
+    remaining %= block;
+  }
+  lliCount += (remaining > 0);
 
-    for (int w = 0; w < 5 && remaining > 0; w++) {
-      u32 width = modes[w].width;
-      u32 widthBit = modes[w].widthBit;
-      u32 block = width * MAX_TRANSFER_SIZE;
+  const u32 byteCount = sizeof(DMADescriptor) * lliCount;
+  DMADescriptor* const lli = (DMADescriptor*) memalign(64, (byteCount + 63) & ~63);
 
-      if (w < 4 && remaining >= block) {
-        u32 blockCount = remaining / block;
-        for (u32 j = 0; j < blockCount; j++) {
-          _lli[i].src = src + offset;
-          _lli[i].dst = dst + offset;
-          _lli[i].ctrl = DMA_CONTROL_ME2SC(widthBit, MAX_TRANSFER_SIZE);
-          _lli[i].status = 1;
-          _lli[i].next = (i < lliCount - 1) ? (UNCACHED_USER_MASK | (u32)&_lli[i + 1]) : 0;
-          offset += block;
-          remaining -= block;
-          i++;
-        }
-      }
-      else if (remaining > 0) {
-        _lli[i].src = src + offset;
-        _lli[i].dst = dst + offset;
-        _lli[i].ctrl = DMA_CONTROL_ME2SC(0, remaining);
-        _lli[i].status = 1;
-        _lli[i].next = 0;
+  u32 i = 0;
+  u32 offset = 0;
+  remaining = size;
+
+  for (int w = 0; w < 5 && remaining > 0; w++) {
+    u32 width = modes[w].width;
+    u32 widthBit = modes[w].widthBit;
+    u32 block = width * MAX_TRANSFER_SIZE;
+
+    if (w < 4 && remaining >= block) {
+      u32 blockCount = remaining / block;
+      for (u32 j = 0; j < blockCount; j++) {
+        lli[i].src = src + offset;
+        lli[i].dst = dst + offset;
+        lli[i].ctrl = DMA_CONTROL_ME2SC(widthBit, MAX_TRANSFER_SIZE);
+        lli[i].status = 1;
+        lli[i].next = (i < lliCount - 1) ? (UNCACHED_USER_MASK | (u32)&lli[i + 1]) : 0;
+        offset += block;
+        remaining -= block;
         i++;
-        remaining = 0;
       }
     }
-    dmacplusLLIFromMe(_lli);
-    waitChannel();
-    free(lli);
+    else if (remaining > 0) {
+      lli[i].src = src + offset;
+      lli[i].dst = dst + offset;
+      lli[i].ctrl = DMA_CONTROL_ME2SC(0, remaining);
+      lli[i].status = 1;
+      lli[i].next = 0;
+      i++;
+      remaining = 0;
+    }
+  }
+  
+  sceKernelDcacheWritebackInvalidateRange((void*)lli, byteCount);
+  return lli;
 }
