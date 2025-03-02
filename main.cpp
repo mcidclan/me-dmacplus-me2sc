@@ -69,7 +69,7 @@ static int initMe() {
   return 0;
 }
 
-static volatile DMADescriptor* lli = nullptr;
+static DMADescriptor* lli = nullptr;
 
 static int me2Sc() {
   cleanChannel();
@@ -119,7 +119,7 @@ int main() {
     asm volatile("sync");
   } while(meExit < 2);
   
-  free((void*)lli);
+  free(lli);
   meGetUncached32(0);
   exitSample("Exiting...");
   return 0;

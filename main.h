@@ -73,7 +73,7 @@ inline unsigned short int randInRange(const unsigned short int range) {
 #define DMA_CONTROL_ME2SC(width, size)  DMA_CONTROL_CONFIG(0, 0, 0, 1, (width), (size))
 
 #define DMA_CONTROL_CONFIG(idst, isrc, mdst, msrc, width, size) ( \
-  (1U << 31) |                  /* terminal count interrupt enable bit */ \
+  (0U << 31) |                  /* terminal count interrupt enable bit */ \
   ((unsigned)(idst) << 27) |    /* dst addr increment ?                */ \
   ((unsigned)(isrc) << 26) |    /* src addr increment ?                */ \
   ((unsigned)(mdst) << 25) |    /* dst AHB master select               */ \
@@ -105,7 +105,7 @@ inline void waitChannel() {
   };
 }
 
-inline void dmacplusLLIFromMe(volatile const DMADescriptor* const lli) {
+inline void dmacplusLLIFromMe(const DMADescriptor* const lli) {
   hw(0xbc8001a0) = lli->src;
   hw(0xbc8001a4) = lli->dst;
   hw(0xbc8001a8) = lli->next;
@@ -149,7 +149,7 @@ inline DMADescriptor* dmacplusInitMe2ScLLI(const u32 src, const u32 dst, const u
         lli[i].dst = dst + offset;
         lli[i].ctrl = DMA_CONTROL_ME2SC(widthBit, MAX_TRANSFER_SIZE);
         lli[i].status = 1;
-        lli[i].next = (i < lliCount - 1) ? (UNCACHED_USER_MASK | (u32)&lli[i + 1]) : 0;
+        lli[i].next = (i < lliCount - 1) ? ((u32)&lli[i + 1]) : 0;
         offset += block;
         remaining -= block;
         i++;
